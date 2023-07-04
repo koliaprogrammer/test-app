@@ -1,0 +1,148 @@
+const router = require('express').Router();
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
+const multer = require('multer');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const cloudinary = require('cloudinary').v2;
+require("dotenv").config();
+const { users } = require('./../model/User');
+const { storage } = require('../model/CloudinaryConfig'); // Import the storage configuration
+
+const upload = multer({ storage: storage });
+
+
+// Маршрут для реєстрації нового користувача
+router.post('/register', (req, res) => {
+    const { email, password, name } = req.body;
+  
+    // Перевірка, чи користувач з такою електронною поштою вже існує
+    const existingUser = users.find(user => user.email === email);
+    if (existingUser) {
+      return res.status(400).json({ message: 'User with this email already exists' });
+    }
+  
+    // Хешування пароля перед збереженням
+    bcrypt.hash(password, 10, (err, hashedPassword) => {
+      if (err) {
+        return res.status(500).json({ message: 'Error hashing password' });
+      }
+  
+      const newUser = {
+        id: users.length + 1,
+        email,
+        password: hashedPassword,
+        name,
+        verified: false,
+        avatar: {
+          original: '',
+          medium: '',
+          small: '',
+        },
+      };
+  
+      users.push(newUser);
+  
+      // Відправка листа для підтвердження пошти
+      sendVerificationEmail(newUser);
+  
+      res.status(201).json({ message: 'User registered successfully' });
+    });
+  });
+  
+  // Маршрут для підтвердження пошти
+  router.get('/verify-email/:userId', (req, res) => {
+    const { userId } = req.params;
+  
+    // Знайдіть користувача за ідентифікатором і позначте його як підтвердженого
+    const user = users.find(user => user.id === parseInt(userId));
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+  
+    user.verified = true;
+  
+    res.status(200).json({ message: 'Email verified successfully' });
+  });
+  
+  // Маршрут для автентифікації користувача
+  router.post('/login', (req, res) => {
+    const { email, password } = req.body;
+  
+    // Знайти користувача за електронною поштою
+    const user = users.find(user => user.email === email);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+  
+    // Перевірка пароля
+    bcrypt.compare(password, user.password, (err, result) => {
+      if (err) {
+        return res.status(401).json({ message: 'Authentication failed' });
+      }
+  
+      if (!result) {
+        return res.status(401).json({ message: 'Authentication failed' });
+      }
+  
+      // Створення JWT-токена
+      const token = jwt.sign({ userId: user.id }, 'YOUR_SECRET_KEY', { expiresIn: '1h' });
+  
+      res.status(200).json({ token });
+    });
+  });
+  
+  // Маршрут для оновлення даних користувача
+  router.put('/profile', upload.single('avatar'), (req, res) => {
+    const { userId } = req.body;
+  
+    // Пошук користувача за ID
+    const user = users.find(user => user.id === parseInt(userId));
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+  
+    const { name } = req.body;
+  
+    // 
+    user.name = name;
+  
+    if (req.file) {
+      const { original, medium, small } = req.file;
+      user.avatar = {
+        original: original.url,
+        medium: medium.url,
+        small: small.url,
+      };
+    }
+  
+    res.status(200).json({ message: 'Profile updated successfully' });
+  });
+  
+  // Відправка листа для підтвердження пошти
+  function sendVerificationEmail(user) {
+    const transporter = nodemailer.createTransport({
+      service: 'Gmail',
+      auth: {
+        user: process.env.GMAIL_USER,
+            pass: process.env.GMAIL_PASS,
+      },
+    });
+  
+    const mailOptions = {
+      from: process.env.GMAIL_USER,
+      to: user.email,
+      subject: 'Email Verification',
+      text: `${user.name}, please click on the link to verify your email: http://mywebsite.com/verify-email/${user.id}`,
+    };
+  
+    transporter.sendMail(mailOptions, function (error, info) {
+      if (error) {
+        console.log(error);
+      } else {
+        console.log('Email sent: ' + info.response);
+      }
+    });
+}
+  
+module.exports = router;
